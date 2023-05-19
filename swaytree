@@ -1,0 +1,132 @@
+#!/bin/sh
+set -eu
+
+command -v swaymsg >/dev/null 2>&1 || exit 1
+command -v jq      >/dev/null 2>&1 || exit 1
+
+rawp() { printf "%s\n" "${1}"; }
+INDENT_STEP="    "
+
+print_node() {
+    local DATA="${1}"
+    local INDENT="${2}"
+
+    local TYPE="$(rawp "${DATA}" | jq -r '.type')"
+    case "${TYPE}" in
+        "workspace") print_workspace "${DATA}" "${INDENT}" ;;
+              "con") print_container "${DATA}" "${INDENT}" ;;
+           "output") print_output    "${DATA}" "${INDENT}" ;;
+                  *) printf "[E]: Unhandled type!\n"
+                     exit 1
+                     ;;
+    esac
+}
+
+# Input: array of nodes
+print_nodes() {
+    local DATA="${1}"
+    local INDENT="${2}"
+
+    local NODES_NUM="$(rawp "${DATA}" | jq -r 'length')"
+    if [ "${NODES_NUM}" -gt 0 ]; then
+        for NODE_IDX in $(seq 0 $((NODES_NUM - 1))); do
+            print_node "$(rawp "${DATA}" | jq ".[${NODE_IDX}]")" "${INDENT}"
+        done
+    fi
+}
+
+# Window or container
+print_container() {
+    local DATA="${1}"
+    local INDENT="${2}"
+
+    local   TYPE="$(rawp "${DATA}" | jq -r '.type')"
+    local LAYOUT="$(rawp "${DATA}" | jq -r '.layout')"
+    local   NAME="$(rawp "${DATA}" | jq -r '.name')"
+
+    [ "${TYPE}" = "con" ] || exit 1
+
+    if [ "${LAYOUT}" = "none" ]; then
+        # Window
+        printf "%sWindow: %s\n" "${INDENT}" "${NAME}"
+    else
+        # Container
+        printf "%sContainer: (%s)\n" "${INDENT}" "${LAYOUT}"
+
+        print_nodes "$(rawp "${DATA}" | jq -r '.nodes')" "${INDENT_STEP}${INDENT}"
+    fi
+}
+
+print_workspace() {
+    local DATA="${1}"
+    local INDENT="${2}"
+
+    local   TYPE="$(rawp "${DATA}" | jq -r '.type')"
+    local LAYOUT="$(rawp "${DATA}" | jq -r '.layout')"
+    local   NAME="$(rawp "${DATA}" | jq -r '.name')"
+
+    [ "${TYPE}" = "workspace" ] || exit 1
+    printf "${INDENT}Workspace: %s (%s)\n" "${NAME}" "${LAYOUT}"
+
+    print_nodes "$(rawp "${DATA}" | jq '.nodes')" "${INDENT_STEP}${INDENT}"
+}
+
+print_output() {
+    local DATA="${1}"
+    local INDENT="${2}"
+
+    local   TYPE="$(rawp "${DATA}" | jq -r '.type')"
+    local   NAME="$(rawp "${DATA}" | jq -r '.name')"
+
+    [ "${TYPE}" = "output" ] || exit 1
+    printf "${INDENT}Output: %s\n" "${NAME}"
+
+    print_nodes "$(rawp "${DATA}" | jq '.nodes')" "${INDENT_STEP}${INDENT}"
+}
+
+
+usage() {
+    printf "%s [options]\n" "${0}"
+    printf "\n"
+    printf "  options:\n"
+    printf "    -a    all outputs\n"
+    printf "    -w    focused workspace only\n"
+}
+
+OPT_ALL_OUTPUTS="0"
+OPT_FOCUSED_WORKSPACE_ONLY="0"
+
+while [ "${#}" -gt 0 ]; do
+    case "${1}" in
+        "-a") OPT_ALL_OUTPUTS="1"; shift 1 ;;
+        "-w") OPT_FOCUSED_WORKSPACE_ONLY="1"; shift 1 ;;
+           *) printf "Unknown option: %s\n" "${1}"; shift 1 ;;
+    esac
+done
+
+# Do the stuff
+
+if [ "${OPT_ALL_OUTPUTS}" = "1" ]; then
+    # All outputs
+    FOCUSED_OUTPUT_TREE="$(swaymsg -t get_tree | jq '.nodes')"
+
+    if [ "${OPT_FOCUSED_WORKSPACE_ONLY}" = "1" ]; then
+        printf "TODO\n"
+        exit 1
+    else
+        print_nodes "${FOCUSED_OUTPUT_TREE}" ""
+    fi
+else
+    # Get focused output
+    FOCUSED_OUTPUT_ID="$(swaymsg -t get_outputs | \
+        jq -r '.[] | select(.focused == true) | .id')"
+    FOCUSED_OUTPUT_TREE="$(swaymsg -t get_tree | \
+        jq '.nodes[] | select(.id == '"${FOCUSED_OUTPUT_ID}"') | .nodes')"
+
+    if [ "${OPT_FOCUSED_WORKSPACE_ONLY}" = "1" ]; then
+        printf "TODO\n"
+        exit 1
+    else
+        print_nodes "$(rawp "${FOCUSED_OUTPUT_TREE}")" ""
+    fi
+fi
